@@ -1,68 +1,123 @@
-# Crow's Eye
+# Crow’s Eye
 
-Endpoint and network monitoring for machines **you own and administer**: a server (FastAPI + SQLite), a web
-console, and a host agent. Agents report telemetry; the server stores it, runs your detection rules, and raises
-detections, live alerts, webhooks and emails. Nothing scans or captures packets on the network.
+Crow’s Eye is intended to be an endpoint-monitoring dashboard with a FastAPI backend and a static web interface. **This checkout is not currently a complete runnable app.** The default branch contains `static/`, Docker configuration, and Python requirements, but it does not contain the `server/` directory copied by the Dockerfile. The root `run.sh` expects a `crows-eye.zip` that is also not present in the current repository tree. As a result, the full backend cannot be initialized until its source files are restored.
 
+This guide is the default startup guide for this repository and explains what works now and what is needed to run the complete system.
+
+## 1. Prerequisites
+
+For the full system, install:
+
+- Git
+- Docker Engine and the Docker Compose plugin
+- A supported Linux, macOS, or Windows/WSL2 environment
+
+For a static-only preview, Python 3 is sufficient.
+
+## 2. Get the repository
+
+```bash
+git clone https://github.com/Bush-Steven/Crow-s-Eye.git
+cd Crow-s-Eye
 ```
-agent (each host) --HTTPS + per-host API key--> server: events -> rule engine -> detections -> UI / webhook / email
+
+Check that the backend exists before attempting a full launch:
+
+```bash
+test -f server/main.py && echo "Backend source found" || echo "Backend source is missing"
+test -f crows-eye.zip && echo "Project archive found" || echo "Project archive is missing"
 ```
 
-## Quick start (try it)
-    pip install -r requirements.txt
-    CROWS_EYE_DEMO=1 python -m server.main        # synthetic data through the real pipeline
-Open http://127.0.0.1:8000. First-run login: user `admin`, password printed in the log (or `CROWS_EYE_ADMIN_PASSWORD`).
+At the time this guide was written, neither backend source nor the archive is in the default branch. The Docker build and `run.sh` will therefore fail until the backend is restored. Do not treat the dashboard-only preview below as a working monitoring backend.
 
-## Deploy for real
-**Server (Docker):** `cp .env.example .env`, edit it, `docker compose up -d --build`, then put a TLS reverse proxy in
-front (`deploy/Caddyfile`). **Or systemd:** `deploy/crows-eye.service`. Run exactly one server process.
+## 3. Preview the static dashboard (no backend/data)
 
-**Add an endpoint:** Console > Computers > *Add endpoint* (admin). It creates an API key bound to that hostname and shows
-the install command once. On the endpoint:
+From the repository root:
 
-    sudo mkdir -p /opt/crows-eye-agent /etc/crows-eye && sudo cp agent/crows_eye_agent.py /opt/crows-eye-agent/
-    sudo python3 -m venv /opt/crows-eye-agent/venv && sudo /opt/crows-eye-agent/venv/bin/pip install psutil
-    printf 'CROWS_EYE_URL=https://crows-eye.example.org\nCROWS_EYE_API_KEY=ce_...\n' | sudo tee /etc/crows-eye/agent.env
-    sudo chmod 600 /etc/crows-eye/agent.env
-    sudo cp deploy/crows-eye-agent.service /etc/systemd/system/ && sudo systemctl enable --now crows-eye-agent
+```bash
+python3 -m http.server 8080 --directory static
+```
 
-## What the agent collects (and nothing else)
-CPU/memory/disk and network throughput; new processes (name, user, command line with `--password`/`token=`/`api-key`
-style secrets redacted); new outbound connections and new listening ports (process name, remote IP:port); SSH/PAM
-login failures and successes from `/var/log/auth.log` or `/var/log/secure` (Linux). It starts in the foreground with a
-line stating exactly what it monitors. Disable parts with `--no-processes`, `--no-connections`, `--no-auth-log`.
-Command lines can still contain sensitive data the redaction doesn't recognise: tell your users what is collected.
+Open <http://127.0.0.1:8080>. This serves the static UI only. It does not start the API, authenticate users, or provide endpoint data, so live dashboard requests will show an unavailable-backend notice.
 
-## Detection
-Rules (Console > Alert rules) match event fields (`eq, ne, contains, regex, gt/gte/lt/lte, in, is_private, in_blocklist`),
-optionally with a threshold (N events in T seconds, grouped by a field) and a cooldown that suppresses repeats. Defaults:
-brute-force logins, encoded PowerShell, connections to blocklisted IPs (Settings > Blocklist), new listening ports, disk >= 95%.
-Missing heartbeats (`offline_after`, default 90s) raise a LOW detection. Health score = % of endpoints reporting, minus 5
-per open CRITICAL and 2 per open HIGH detection.
+Stop the preview with `Ctrl+C`.
 
-## Integrations
-Create an *integration key* (Settings > API keys) for: `POST /api/ingest/wazuh` (raw Wazuh alert JSON; `rule.level` 12+
-CRITICAL, 10+ HIGH, 7+ MEDIUM, else LOW) and `POST /api/ingest/events` (`{severity,name,source,device,detail}`), header `X-API-Key`.
-Webhook (Slack-compatible JSON) and SMTP email alerts are configured in Settings; the SMTP password comes from the
-`CROWS_EYE_SMTP_PASSWORD` environment variable, never the database.
+## 4. Initialize and start the full app (after backend source is restored)
 
-## Security model
-- Users: scrypt-hashed passwords (10+ chars), roles **viewer** (read) / **analyst** (+triage, alerts) / **admin** (+rules, settings, keys, users).
-  HttpOnly + SameSite=Strict session cookie, per-session CSRF token on every write, login throttling (5 failures / 5 min),
-  sessions revoked on password change/disable. The last active admin cannot be removed.
-- Agents authenticate with per-host API keys (stored as SHA-256 hashes). A key can only speak for its own hostname and cannot call
-  integration endpoints, and vice versa. Revoke in Settings; removing an endpoint revokes its keys.
-- All ingested text is HTML-escaped in the UI; strict CSP, no inline scripts. Admin/auth actions go to an audit log.
-- Use HTTPS (agents warn on plain HTTP to non-local hosts). Set `CROWS_EYE_SECURE_COOKIES=1`.
+First confirm these files are present:
 
-## Operations
-- **Backup:** `sqlite3 /var/lib/crows-eye/crows_eye.db ".backup /backups/ce-$(date +%F).db"` (safe while running).
-- **Retention:** raw events 7 days (`retention_days`), traffic/metrics 2 days, detections 1 year.
-- **Health check:** `GET /healthz`. **Config:** `CROWS_EYE_DATA, _HOST, _PORT, _DEMO, _ADMIN_PASSWORD, _SECURE_COOKIES, _TRUST_PROXY, _SMTP_PASSWORD, _DB`.
-- **Tests:** `pip install pytest httpx psutil && python -m pytest tests`
+```text
+server/main.py
+server/...
+static/index.html
+Dockerfile
+docker-compose.yml
+requirements.txt
+```
 
-## Known limits
-Polling agent: processes that start and exit between polls (10s) are missed; this is not a kernel-level EDR. Auth-log
-collection is Linux-only (Windows agents report processes, connections, ports and metrics, but not Windows event logs;
-untested on Windows/macOS). SQLite on one node suits dozens to low hundreds of endpoints. No rate limiting on ingest beyond
-payload caps (500 events/report, 4 MB). Webhook URLs are admin-supplied and not restricted to public addresses.
+Create a local environment file and set a unique, strong admin password. Keep `.env` private and never commit it:
+
+```bash
+cp .env.example .env
+```
+
+Edit `.env`. For local HTTP testing, use settings appropriate for local development; set `CROWS_EYE_SECURE_COOKIES=0`. For production behind HTTPS, use a strong unique `CROWS_EYE_ADMIN_PASSWORD` and set `CROWS_EYE_SECURE_COOKIES=1`. Only set `CROWS_EYE_TRUST_PROXY=1` when the service is behind a reverse proxy you control.
+
+Build and start the app:
+
+```bash
+docker compose up --build
+```
+
+Open <http://127.0.0.1:8000>. Check the health endpoint:
+
+```bash
+curl -fsS http://127.0.0.1:8000/healthz
+```
+
+The documented initial username is `admin`; the password is the value of `CROWS_EYE_ADMIN_PASSWORD` in `.env` (or a generated password printed by the backend on first start, if that backend supports generated credentials). Change initial credentials after signing in. The current repository does not include the backend, so this login flow cannot be verified or used until those source files are restored.
+
+Stop the service with `Ctrl+C`. To stop and remove the container while preserving its named data volume:
+
+```bash
+docker compose down
+```
+
+To also delete the persistent database volume (destructive; removes stored app data):
+
+```bash
+docker compose down -v
+```
+
+## 5. Run without Docker (after backend source is restored)
+
+Create and activate a virtual environment, install dependencies, and start the server:
+
+```bash
+python3 -m venv .venv
+# Linux/macOS:
+source .venv/bin/activate
+# Windows PowerShell:
+# .venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+pip install -r requirements.txt
+python -m server.main
+```
+
+Then browse to <http://127.0.0.1:8000>. Do not expose a development server directly to the public internet.
+
+## 6. GitHub Pages and production hosting
+
+GitHub Pages can host only static files; it cannot run the FastAPI backend or SQLite database. The Pages deployment workflow and `docs/` site are not present in the current default branch. For a live system, first restore and deploy the backend on a host that runs Python/Docker, configure HTTPS, then publish the frontend and point it to that backend. Configure CORS and authentication deliberately; never put API keys or passwords in frontend JavaScript or public Pages files.
+
+## Troubleshooting
+
+- **Docker says `server` was not found:** backend source is absent; restore `server/` before building.
+- **`run.sh` says the archive is missing:** the script expects `crows-eye.zip`; restore the archive or use the direct source layout, then update the launcher accordingly.
+- **Health endpoint fails:** ensure the backend is running and inspect logs with `docker compose logs -f crows-eye`.
+- **Dashboard shows unavailable API:** a static preview has no backend. Start the API and serve the frontend from the configured backend origin.
+- **Login does not work:** check the backend startup logs and `.env`; there are no usable default credentials until the backend initializes its user database.
+
+## Security and monitoring scope
+
+Only install monitoring agents on machines you own or are authorized to administer. Review the data collected and inform affected users. Use HTTPS for remote access, protect `.env` and API keys, and avoid using sample passwords in production.
